@@ -578,7 +578,7 @@ html[lang="en"] .brand-en{display:none}
 
 <script>
 const $=id=>document.getElementById(id);
-const store={get:k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const store={get:k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}if(k==="pets")onPetsSaved()}};
 let pets=store.get("pets")||[], cur=store.get("cur")||0, pos=null, posNote="";
 const DAY=864e5, today=()=>new Date().toISOString().slice(0,10);
 const fmt=d=>new Date(d).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit"});
@@ -1786,48 +1786,83 @@ function introInit(){const el=$("intro");let seen=false;try{seen=sessionStorage.
   {x:86,y:20,c:"#D6BEEA",u:"1425082661705-1834bfd09dca",a:{sp:"exotic",kind:"rodent"}}];
  $("inArt").innerHTML=bars.map((b,i)=>`<div class="in-bar" style="--x:${b.x}%;--y:${b.y}%;z-index:${100-b.y};background:${b.c};animation-delay:${i*160}ms;-webkit-animation-delay:${i*160}ms"><span style="animation-delay:${i*160+900}ms;-webkit-animation-delay:${i*160+900}ms">${animalArt(b.a)}<img src="${U(b.u)}" alt="" onerror="this.remove()"></span></div>`).join("");
  renderAuth()}
-// ---------- เข้าสู่ระบบด้วย Google (Google Identity Services, ไม่มีเซิร์ฟเวอร์) ----------
-// ใส่ Client ID จาก Google Cloud Console (ไม่ใช่ความลับ ใส่ใน HTML ได้) ขั้นตอนอยู่ใน google-login/ขั้นตอนตั้งค่า.md
-const GOOGLE_CLIENT_ID="77966609948-fms8s2m4ar6b7pbrqq75bje8cobhbrpf.apps.googleusercontent.com";
+// ---------- บัญชีและซิงก์ข้อมูล (Supabase: เข้าสู่ระบบด้วย Google + เก็บข้อมูลน้องออนไลน์) ----------
+// URL และ publishable key เปิดเผยได้ (ตาราง pet_data เปิด row level security: แต่ละบัญชีอ่าน/เขียนได้แค่แถวของตัวเอง) · ห้ามใส่ service_role / secret key
+const SB_URL="https://zthogffodmigjlnaqmel.supabase.co", SB_KEY="sb_publishable_GaS9o9JPMoBV72RIWA6GjA_9w70Um8d";
+const SB_LIB="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js";
 const G_LOGO=`<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>`;
 function getUser(){try{return JSON.parse(localStorage.getItem("user")||"null")}catch(e){return null}}
-let gisP=null;
-function loadGIS(){if(window.google&&google.accounts&&google.accounts.oauth2)return Promise.resolve();
- if(!gisP)gisP=new Promise((ok,no)=>{const sc=document.createElement("script");sc.src="https://accounts.google.com/gsi/client";sc.async=true;sc.onload=ok;sc.onerror=()=>{gisP=null;no(new Error("load"))};document.head.appendChild(sc)});return gisP}
+var sb=null,sbP=null,sbUid=null,pushT=null,applying=false;
+function loadSB(){if(sb)return Promise.resolve(sb);
+ if(!sbP)sbP=new Promise((ok,no)=>{const sc=document.createElement("script");sc.src=SB_LIB;sc.async=true;
+  sc.onload=()=>{try{sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,flowType:"pkce"}});
+   // ห้ามเรียก supabase ต่อในตัว callback ตรง ๆ (ค้างได้) จึงเลื่อนไปทำหลัง callback จบ
+   sb.auth.onAuthStateChange((ev,ses)=>setTimeout(()=>onSession(ses),0));ok(sb)}catch(e){sbP=null;no(e)}};
+  sc.onerror=()=>{sbP=null;no(new Error("load"))};document.head.appendChild(sc)});
+ return sbP}
+function onSession(ses){const u=ses&&ses.user;
+ if(!u){if(sbUid===null&&getUser()){try{localStorage.removeItem("user")}catch(e){}renderOwner();renderAuth()}sbUid=null;return}
+ if(location.search.includes("code=")){try{history.replaceState(null,"",location.pathname+location.hash)}catch(e){}}
+ if(sbUid===u.id)return;sbUid=u.id;const m=u.user_metadata||{};
+ try{localStorage.setItem("user",JSON.stringify({name:m.full_name||m.name||"",email:u.email||m.email||"",pic:m.avatar_url||m.picture||""}))}catch(e){}
+ renderOwner();renderAuth();cloudPull()}
+// ---------- ซิงก์: เก็บทั้งรายการน้องเป็น JSON แถวเดียวต่อบัญชี · sync = {owner: บัญชีเจ้าของข้อมูลในเครื่อง, at: เวลาของข้อมูลออนไลน์ที่รู้ล่าสุด, dirty: มีแก้ในเครื่องที่ยังไม่ส่ง}
+function syncGet(){try{return JSON.parse(localStorage.getItem("sync")||"{}")||{}}catch(e){return {}}}
+function syncSet(o){try{localStorage.setItem("sync",JSON.stringify(o))}catch(e){}}
+function onPetsSaved(){if(applying)return;const s=syncGet();s.dirty=true;syncSet(s);if(sbUid){clearTimeout(pushT);pushT=setTimeout(cloudPush,1200)}}
+async function cloudPush(){clearTimeout(pushT);pushT=null;const uid=sbUid;if(!sb||!uid)return false;const at=new Date().toISOString();
+ try{const {error}=await sb.from("pet_data").upsert({user_id:uid,data:{v:1,pets},updated_at:at});if(error)throw error}catch(e){console.warn("sync push",e);return false}
+ const s=syncGet();syncSet({owner:uid,at,dirty:pushT?s.dirty:false});return true}
+const sameT=(a,b)=>!!a&&!!b&&Date.parse(a)===Date.parse(b);
+const petKey=p=>[p.name,p.sp,p.dob].join("|");
+function mergePets(base,extra,preferExtra){const out=base.map(p=>p),idx=new Map(out.map((p,i)=>[petKey(p),i]));
+ extra.forEach(p=>{const k=petKey(p);if(!idx.has(k)){idx.set(k,out.length);out.push(p)}else if(preferExtra)out[idx.get(k)]=p});return out}
+function applyPets(arr){applying=true;pets=arr;if(!(cur<pets.length))cur=0;store.set("pets",pets);store.set("cur",cur);applying=false;healthSel=pets.length?cur:null;renderAll()}
+async function cloudPull(){const uid=sbUid;if(!sb||!uid)return;let row;
+ try{const r=await sb.from("pet_data").select("data,updated_at").eq("user_id",uid).maybeSingle();if(r.error)throw r.error;row=r.data}catch(e){console.warn("sync pull",e);return}
+ if(uid!==sbUid)return;
+ const s=syncGet(),remote=row&&row.data&&Array.isArray(row.data.pets)?row.data.pets:null;
+ // ข้อมูลในเครื่องเป็นของบัญชีอื่น = ใช้ของบัญชีนี้แทน · ข้อมูลที่เพิ่มก่อนเข้าสู่ระบบ = รวมเข้าบัญชี · มีแก้ค้างในเครื่อง = รวมโดยยึดของในเครื่อง
+ if(s.owner&&s.owner!==uid){applyPets(remote||[]);if(remote)syncSet({owner:uid,at:row.updated_at,dirty:false});else await cloudPush();return}
+ if(!remote){if(pets.length||!s.owner)await cloudPush();return}
+ if(!s.owner){const n=pets.length;applyPets(mergePets(remote,pets,false));await cloudPush();if(n||remote.length)toast("Your pets are now synced with your account");return}
+ if(s.dirty){if(!sameT(row.updated_at,s.at))applyPets(mergePets(remote,pets,true));await cloudPush();return}
+ if(!sameT(row.updated_at,s.at)){applyPets(remote);syncSet({owner:uid,at:row.updated_at,dirty:false})}}
+document.addEventListener("visibilitychange",()=>{if(!sbUid)return;if(document.visibilityState==="hidden"){if(pushT)cloudPush()}else cloudPull()});
 function enterApp(){const el=$("intro");if(!el)return;try{sessionStorage.setItem("introSeen","1")}catch(e){}el.classList.add("out");setTimeout(()=>el.remove(),380)}
 function renderAuth(msg){const box=$("inAuth");if(!box){if(msg)toast(msg);return}const u=getUser();
  box.innerHTML=u?`<button class="gbtn" id="authMain" onclick="enterApp()">${u.pic?`<img src="${escH(u.pic)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">`:G_LOGO}<span>Continue as ${escH(u.name||u.email||"")}</span></button><button class="auth-skip" onclick="signOut(true)">Not you? Switch account</button>`
  :`<button class="gbtn" id="authMain" onclick="googleLogin()">${G_LOGO}<span>Sign in with Google</span></button>${msg?`<p class="auth-msg" role="alert">${msg}</p>`:""}<button class="auth-skip" onclick="enterApp()">Continue without signing in</button>`;
- if(GOOGLE_CLIENT_ID&&!u)loadGIS().catch(()=>{});
  setTimeout(()=>{const b=$("authMain");if(b)b.focus({preventScroll:true})},400)}
-// ใช้ token flow (ป๊อปอัป) กับปุ่มของแอพเอง แล้วดึงชื่อ อีเมล รูป จาก userinfo · เก็บไว้ในเครื่องเท่านั้น
-let gTok=null;
-function googleLogin(){
- if(!GOOGLE_CLIENT_ID){renderAuth("Google sign-in is not set up in this app yet. Tap “Continue without signing in” for now");return}
- const b=$("authMain");
- if(!(window.google&&google.accounts&&google.accounts.oauth2)){if(b)b.disabled=true;loadGIS().then(()=>{if(b)b.disabled=false;renderAuth("Ready. Tap sign in again")}).catch(()=>renderAuth("Could not load Google sign-in. Check your internet and try again"));return}
- if(!gTok)gTok=google.accounts.oauth2.initTokenClient({client_id:GOOGLE_CLIENT_ID,scope:"openid email profile",
-  callback:async r=>{if(!r||r.error){renderAuth("Sign-in failed. Please try again");return}
-   try{const res=await fetch("https://www.googleapis.com/oauth2/v3/userinfo",{headers:{Authorization:"Bearer "+r.access_token}});if(!res.ok)throw 0;const i=await res.json();
-    localStorage.setItem("user",JSON.stringify({name:i.name||i.given_name||"",email:i.email||"",pic:i.picture||""}));
-    try{google.accounts.oauth2.revoke(r.access_token,()=>{})}catch(e){}
-    toast("Signed in");enterApp();renderOwner()}catch(e){renderAuth("Could not get your account info. Please try again")}},
-  error_callback:e=>{if(e&&e.type==="popup_closed")renderAuth();else renderAuth("Could not open the Google window. Turn off the pop-up blocker and try again")}});
- gTok.requestAccessToken({prompt:"select_account"})}
-function signOut(fromIntro){try{localStorage.removeItem("user")}catch(e){}closeOwner();renderOwner();if(fromIntro){renderAuth();googleLogin()}else{closeSheet();toast("Signed out")}}
+// เข้าสู่ระบบ: พาไปหน้า Google ทั้งหน้า (ไม่ใช่ป๊อปอัป) แล้ว Supabase พากลับมาหน้าเดิม · ข้ามหน้าเปิดแอพตอนกลับมา
+async function googleLogin(){
+ try{await loadSB()}catch(e){renderAuth("Could not load sign-in. Check your internet and try again");return}
+ if(sbUid&&pushT)await cloudPush();
+ try{sessionStorage.setItem("introSeen","1")}catch(e){}
+ const {error}=await sb.auth.signInWithOAuth({provider:"google",options:{redirectTo:location.origin+location.pathname,queryParams:{prompt:"select_account"}}});
+ if(error)renderAuth("Sign-in failed. Please try again")}
+// ออกจากระบบ: ส่งข้อมูลที่ค้างขึ้นออนไลน์ก่อน แล้วล้างข้อมูลน้องออกจากเครื่องนี้ (ยังอยู่ในบัญชี) · ส่งไม่สำเร็จจะเก็บไว้ในเครื่องต่อ
+async function signOut(fromIntro){closeOwner();let ok=true;
+ if(sbUid&&syncGet().dirty)ok=await cloudPush();
+ const wasIn=!!sbUid;sbUid=null;try{if(sb)await sb.auth.signOut({scope:"local"})}catch(e){}
+ try{localStorage.removeItem("user")}catch(e){}
+ if(wasIn&&ok){applyPets([]);syncSet({})}
+ renderOwner();if(fromIntro){renderAuth();googleLogin()}else{closeSheet();toast(ok?"Signed out. Your pets are still saved in your account":"Signed out, but syncing failed. Your data is kept on this device")}}
 function renderOwner(){const u=getUser();
  document.querySelectorAll(".owner-slot").forEach(sl=>{sl.innerHTML=`<button class="owner" onclick="toggleOwner(this)" aria-haspopup="menu" aria-expanded="false" aria-label="${u?`Account of ${escH(u.name||u.email||"")}`:"Account"}">${u&&u.pic?`<img src="${escH(u.pic)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith('👤')">`:"👤"}</button>`})}
 function closeOwner(){document.querySelectorAll(".omenu").forEach(m=>m.remove());document.querySelectorAll(".owner").forEach(b=>b.setAttribute("aria-expanded","false"))}
 function toggleOwner(btn){const open=btn.getAttribute("aria-expanded")==="true";closeOwner();if(open)return;const u=getUser();
  const m=document.createElement("div");m.className="omenu";m.setAttribute("role","menu");
  m.innerHTML=(u?`<div class="who"><b>${escH(u.name||"")}</b><span>${escH(u.email||"")}</span></div>`:`<div class="who"><b>Not signed in</b><span>Every feature works without signing in</span></div>`)
-  +`<button role="menuitem" onclick="closeOwner();openSettings()">⚙️ Settings</button>`
-  +(u?`<button role="menuitem" class="out" onclick="signOut()">↩ Sign out</button>`:`<button role="menuitem" onclick="closeOwner();googleLogin()">${G_LOGO.replace('<svg','<svg width="18" height="18"')} Sign in with Google</button>`);
- btn.parentNode.appendChild(m);btn.setAttribute("aria-expanded","true");if(!u&&GOOGLE_CLIENT_ID)loadGIS().catch(()=>{});
+  +(u?`<button role="menuitem" onclick="closeOwner();googleLogin()">${G_LOGO.replace('<svg','<svg width="18" height="18"')} Switch Google account</button><button role="menuitem" class="out" onclick="signOut()">↩ Sign out</button>`:`<button role="menuitem" onclick="closeOwner();googleLogin()">${G_LOGO.replace('<svg','<svg width="18" height="18"')} Sign in with Google</button>`);
+ btn.parentNode.appendChild(m);btn.setAttribute("aria-expanded","true");loadSB().catch(()=>{});
  const f=m.querySelector("button");if(f)f.focus({preventScroll:true})}
 document.addEventListener("click",e=>{if(!e.target.closest(".owner-slot"))closeOwner()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.querySelector(".omenu")){const b=document.querySelector('.owner[aria-expanded="true"]');closeOwner();if(b)b.focus()}});
 renderOwner();
+// กลับมาจากหน้า Google แบบไม่สำเร็จ (เช่น กดยกเลิก)
+if(/[?&#]error_description=/.test(location.search+location.hash)){toast("Sign-in failed. Please try again");try{history.replaceState(null,"",location.pathname)}catch(e){}}
+loadSB().catch(()=>{});
 introInit();
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("sheet").style.display==="block")closeSheet()});
 startReminders();
